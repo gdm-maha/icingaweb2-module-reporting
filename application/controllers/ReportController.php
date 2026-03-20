@@ -236,10 +236,9 @@ class ReportController extends Controller
         Environment::raiseMemoryLimit();
 
         $name = sprintf(
-            '%s (%s) %s',
+            '%s - Availability %s',
+            substr(date('Y'), 2, 2) . date('m'),
             $this->report->getName(),
-            $this->report->getTimeframe()->getName(),
-            date('Y-m-d H:i')
         );
 
         switch ($type) {
