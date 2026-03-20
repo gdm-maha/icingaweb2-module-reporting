@@ -1,7 +1,6 @@
 <?php
 
-// SPDX-FileCopyrightText: 2019 Icinga GmbH <https://icinga.com>
-// SPDX-License-Identifier: GPL-3.0-or-later
+// Icinga Reporting | (c) 2018 Icinga GmbH | GPLv2
 
 namespace Icinga\Module\Reporting;
 
@@ -10,9 +9,11 @@ use Exception;
 use Icinga\Module\Icingadb\ProvidedHook\Reporting\ServiceSlaReport;
 use Icinga\Module\Icingadb\ProvidedHook\Reporting\SlaReport;
 use Icinga\Module\Pdfexport\PrintableHtmlDocument;
+use Icinga\Module\Reporting\Model;
 use Icinga\Module\Reporting\Web\Widget\Template;
-use Icinga\Util\Json;
 use ipl\Html\HtmlDocument;
+use ipl\Html\HtmlElement;
+use ipl\Html\HtmlString;
 
 use function ipl\I18n\t;
 
@@ -39,9 +40,6 @@ class Report
     /** @var Template */
     protected $template;
 
-    /** @var ?string */
-    protected ?string $templateName = null;
-
     /**
      * Create report from the given model
      *
@@ -61,7 +59,6 @@ class Report
 
         $template = $reportModel->template->first();
         if ($template !== null) {
-            $report->templateName = $template->name;
             $report->template = Template::fromModel($template);
         }
 
@@ -127,27 +124,6 @@ class Report
     }
 
     /**
-     * Get a checksum for this report
-     *
-     * @return string
-     */
-    public function getChecksum(): string
-    {
-        return md5(
-            $this->getName()
-            . $this->getTimeframe()->getName()
-            . $this->templateName
-            . Json::encode(array_map(
-                function (Reportlet $reportlet) {
-                    return $reportlet->getConfig();
-                },
-                $this->getReportlets()
-            )),
-            true
-        );
-    }
-
-    /**
      * @return  Schedule
      */
     public function getSchedule()
@@ -187,8 +163,34 @@ class Report
 
         foreach ($this->getReportlets() as $reportlet) {
             $implementation = $reportlet->getImplementation();
+            $config = $reportlet->getConfig();
+            $groupBy = isset($config['group_by']) && $config['group_by'] !== '' ? $config['group_by'] : null;
 
-            $html->add($implementation->getHtml($timerange, $reportlet->getConfig()));
+            if ($groupBy !== null) {
+                $groupedData = $implementation->getGroupedData($timerange, $groupBy, $config);
+                if ($groupedData !== null && $groupedData->hasGroups()) {
+                    $groupLabel = ucfirst(str_replace('_', ' ', $groupBy));
+                    foreach ($groupedData->getGroups() as $groupName => $data) {
+                        $html->add(new HtmlElement('h2', null, new HtmlString(htmlspecialchars($groupLabel . ': ' . $groupName))));
+                        $html->add($implementation->getHtml($timerange, array_merge($config, [
+                            '_group_name' => $groupName,
+                            '_group_data' => $data,
+                        ])));
+                    }
+
+                    $grandTotal = $groupedData->getGrandTotal();
+                    if ($grandTotal !== null && count($grandTotal) > 0) {
+                        $html->add(new HtmlElement('h2', null, new HtmlString(t('Grand Total'))));
+                        $html->add($implementation->getHtml($timerange, array_merge($config, [
+                            '_group_data' => $grandTotal,
+                        ])));
+                    }
+
+                    continue;
+                }
+            }
+
+            $html->add($implementation->getHtml($timerange, $config));
         }
 
         return $html;
@@ -208,12 +210,57 @@ class Report
             $implementation = $reportlet->getImplementation();
 
             if ($implementation->providesData()) {
-                $data = $implementation->getData($timerange, $reportlet->getConfig());
+                $config = $reportlet->getConfig();
+                $groupBy = isset($config['group_by']) && $config['group_by'] !== '' ? $config['group_by'] : null;
+
+                if ($groupBy !== null) {
+                    $groupedData = $implementation->getGroupedData($timerange, $groupBy, $config);
+                    if ($groupedData !== null && $groupedData->hasGroups()) {
+                        $groupLabel = ucfirst(str_replace('_', ' ', $groupBy));
+                        foreach ($groupedData->getGroups() as $groupName => $data) {
+                            $csv[] = [$groupLabel . ': ' . $groupName];
+                            $csv[] = array_merge($data->getDimensions(), $data->getValues());
+                            foreach ($data->getRows() as $row) {
+                                $values = $row->getValues();
+                                if ($convertFloats) {
+                                    foreach ($values as &$value) {
+                                        if (is_float($value)) {
+                                            $value = sprintf('%.4F', $value);
+                                        }
+                                    }
+                                }
+                                $csv[] = array_merge($row->getDimensions(), $values);
+                            }
+                            $csv[] = [];
+                        }
+
+                        $grandTotal = $groupedData->getGrandTotal();
+                        if ($grandTotal !== null && count($grandTotal) > 0) {
+                            $csv[] = [t('Grand Total')];
+                            $csv[] = array_merge($grandTotal->getDimensions(), $grandTotal->getValues());
+                            foreach ($grandTotal->getRows() as $row) {
+                                $values = $row->getValues();
+                                if ($convertFloats) {
+                                    foreach ($values as &$value) {
+                                        if (is_float($value)) {
+                                            $value = sprintf('%.4F', $value);
+                                        }
+                                    }
+                                }
+                                $csv[] = array_merge($row->getDimensions(), $values);
+                            }
+                            $csv[] = [];
+                        }
+
+                        break;
+                    }
+                }
+
+                $data = $implementation->getData($timerange, $config);
                 $csv[] = array_merge($data->getDimensions(), $data->getValues());
 
                 $hosts = [];
                 $isServiceExport = false;
-                $config = $reportlet->getConfig();
                 $exportTotalEnabled = isset($config['export_total']) && $config['export_total'];
                 if ($exportTotalEnabled) {
                     $isServiceExport = $reportlet->getClass() === ServiceSlaReport::class;
@@ -267,13 +314,45 @@ class Report
             $implementation = $reportlet->getImplementation();
 
             if ($implementation->providesData()) {
-                $data = $implementation->getData($timerange, $reportlet->getConfig());
+                $config = $reportlet->getConfig();
+                $groupBy = isset($config['group_by']) && $config['group_by'] !== '' ? $config['group_by'] : null;
+
+                if ($groupBy !== null) {
+                    $groupedData = $implementation->getGroupedData($timerange, $groupBy, $config);
+                    if ($groupedData !== null && $groupedData->hasGroups()) {
+                        foreach ($groupedData->getGroups() as $groupName => $data) {
+                            $dimensions = $data->getDimensions();
+                            $values = $data->getValues();
+                            $groupRows = [];
+                            foreach ($data->getRows() as $row) {
+                                $groupRows[] = array_combine($dimensions, $row->getDimensions())
+                                    + array_combine($values, $row->getValues());
+                            }
+                            $json[$groupName] = $groupRows;
+                        }
+
+                        $grandTotal = $groupedData->getGrandTotal();
+                        if ($grandTotal !== null && count($grandTotal) > 0) {
+                            $dimensions = $grandTotal->getDimensions();
+                            $values = $grandTotal->getValues();
+                            $grandRows = [];
+                            foreach ($grandTotal->getRows() as $row) {
+                                $grandRows[] = array_combine($dimensions, $row->getDimensions())
+                                    + array_combine($values, $row->getValues());
+                            }
+                            $json[t('Grand Total')] = $grandRows;
+                        }
+
+                        break;
+                    }
+                }
+
+                $data = $implementation->getData($timerange, $config);
                 $dimensions = $data->getDimensions();
                 $values = $data->getValues();
 
                 $hosts = [];
                 $isServiceExport = false;
-                $config = $reportlet->getConfig();
                 $exportTotalEnabled = isset($config['export_total']) && $config['export_total'];
                 if ($exportTotalEnabled) {
                     $isServiceExport = $reportlet->getClass() === ServiceSlaReport::class;
