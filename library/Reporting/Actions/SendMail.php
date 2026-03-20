@@ -27,10 +27,9 @@ class SendMail extends ActionHook
     public function execute(Report $report, array $config)
     {
         $name = sprintf(
-            '%s (%s) %s',
+            '%s - Availability %s',
+            substr(date('Y'), 2, 2) . date('m'),
             $report->getName(),
-            $report->getTimeframe()->getName(),
-            date('Y-m-d H:i')
         );
 
         $mail = new Mail();
