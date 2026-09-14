@@ -14,8 +14,10 @@ use Icinga\Module\Reporting\Web\Widget\Template;
 use ipl\Html\HtmlDocument;
 use ipl\Html\HtmlElement;
 use ipl\Html\HtmlString;
+use Icinga\Util\Json;
 
 use function ipl\I18n\t;
+use function md5;
 
 class Report
 {
@@ -113,6 +115,28 @@ class Report
     public function getTimeframe()
     {
         return $this->timeframe;
+    }
+
+    /**
+     * Get the checksum of this report
+     *
+     * @return  string
+     */
+    public function getChecksum(): string
+    {
+        $reportletData = [];
+        foreach ($this->reportlets as $reportlet) {
+            $reportletData[] = [$reportlet->getClass(), $reportlet->getConfig()];
+        }
+
+        return md5(
+            $this->getId()
+            . $this->getName()
+            . $this->getAuthor()
+            . $this->getTimeframe()->getId()
+            . Json::encode($reportletData),
+            true
+        );
     }
 
     /**
