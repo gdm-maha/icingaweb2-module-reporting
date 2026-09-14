@@ -52,9 +52,25 @@ class SendMail extends ActionHook
                 $exporter = method_exists(PdfexportHook::class, 'first')
                     ? PdfexportHook::first()
                     : Pdfexport::first();
-                $mail->attachPdf($exporter->htmlToPdf($report->toPdf()), $name);
 
-                break;
+                if (! method_exists($exporter, 'asyncHtmlToPdf')) {
+                    // Fallback for exporters that don't support the async API. This blocks on
+                    // Loop::run() internally and must not be used while a scheduler loop is
+                    // already running, otherwise the nested/reentrant run() call will hang.
+                    $mail->attachPdf($exporter->htmlToPdf($report->toPdf()), $name);
+                    $mail->send(null, $recipients);
+
+                    return null;
+                }
+
+                // Use the async export API so this doesn't block/nest the already-running
+                // scheduler event loop (Loop::run() must never be called reentrantly).
+                return $exporter->asyncHtmlToPdf($report->toPdf())->then(
+                    function ($pdf) use ($mail, $name, $recipients) {
+                        $mail->attachPdf($pdf, $name);
+                        $mail->send(null, $recipients);
+                    }
+                );
             case 'csv':
                 $mail->attachCsv($report->toCsv(), $name);
 
@@ -68,6 +84,8 @@ class SendMail extends ActionHook
         }
 
         $mail->send(null, $recipients);
+
+        return null;
     }
 
     public function initConfigForm(Form $form, Report $report)
