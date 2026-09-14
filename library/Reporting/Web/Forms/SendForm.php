@@ -9,6 +9,8 @@ use Icinga\Module\Reporting\Actions\SendMail;
 use Icinga\Module\Reporting\ProvidedReports;
 use Icinga\Module\Reporting\Report;
 use ipl\Web\Compat\CompatForm;
+use React\EventLoop\Loop;
+use React\Promise\PromiseInterface;
 
 class SendForm extends CompatForm
 {
