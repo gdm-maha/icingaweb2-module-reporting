@@ -39,6 +39,11 @@ class SendForm extends CompatForm
 
         $sendMail = new SendMail();
 
-        $sendMail->execute($this->report, $values);
-    }
+        $result = $sendMail->execute($this->report, $values);
+
+        if ($result instanceof PromiseInterface) {
+            // There's no scheduler loop already running in this (web) request,
+            // so it's safe to block here until the report has actually been sent.
+            Loop::run();
+        }    }
 }
