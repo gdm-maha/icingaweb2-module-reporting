@@ -141,9 +141,24 @@ class Schedule implements Task
             $actionHook = new $action();
 
             try {
-                $actionHook->execute($this->getReport(), $this->getConfig());
+                $result = $actionHook->execute($this->getReport(), $this->getConfig());
             } catch (Exception $err) {
                 $deferred->reject($err);
+
+                return;
+            }
+
+            if ($result instanceof PromiseInterface) {
+                // Chain the returned promise instead of blocking, so we never call
+                // Loop::run() again while this (already running) scheduler loop is active.
+                $result->then(
+                    function ($value) use ($deferred) {
+                        $deferred->resolve($value);
+                    },
+                    function ($err) use ($deferred) {
+                        $deferred->reject($err);
+                    }
+                );
 
                 return;
             }
